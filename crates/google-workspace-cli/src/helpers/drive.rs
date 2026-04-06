@@ -63,6 +63,47 @@ TIPS:
   Filename is inferred from the local path unless --name is given.",
                 ),
         );
+        cmd = cmd.subcommand(
+            Command::new("+download")
+                .about("[Helper] Download a Drive file to a local path")
+                .arg(
+                    Arg::new("file")
+                        .long("file")
+                        .help("Drive file ID")
+                        .required(true)
+                        .value_name("ID"),
+                )
+                .arg(
+                    Arg::new("output")
+                        .long("output")
+                        .help("Output file path (defaults to the file's name in Drive)")
+                        .value_name("PATH"),
+                )
+                .arg(
+                    Arg::new("mime-type")
+                        .long("mime-type")
+                        .help(
+                            "Export MIME type for Google Workspace native files \
+                             (e.g. application/pdf, text/csv, \
+                             application/vnd.openxmlformats-officedocument.wordprocessingml.document). \
+                             Required for Docs/Sheets/Slides; ignored for binary files.",
+                        )
+                        .value_name("TYPE"),
+                )
+                .after_help(
+                    "\
+EXAMPLES:
+  gws drive +download --file FILE_ID
+  gws drive +download --file FILE_ID --output report.pdf
+  gws drive +download --file FILE_ID --mime-type application/pdf
+  gws drive +download --file FILE_ID --mime-type text/csv --output data.csv
+
+TIPS:
+  For Google Docs/Sheets/Slides, provide --mime-type to choose the export format.
+  For binary files (PDFs, images, etc.), --mime-type is not needed.
+  Output path must be relative to the current directory.",
+                ),
+        );
         cmd
     }
 
@@ -91,7 +132,7 @@ TIPS:
                 })?;
 
                 // Build metadata
-                let metadata = build_metadata(&filename, parent_id.map(|s| s.as_str()));
+                let metadata = build_metadata(&filename, parent_id.map(|s| s.as_str()))?;
 
                 let body_str = metadata.to_string();
 
@@ -125,9 +166,160 @@ TIPS:
 
                 return Ok(true);
             }
+
+            if let Some(matches) = matches.subcommand_matches("+download") {
+                handle_download(matches).await?;
+                return Ok(true);
+            }
+
             Ok(false)
         })
     }
+}
+
+async fn handle_download(matches: &ArgMatches) -> Result<(), GwsError> {
+    let file_id =
+        crate::validate::validate_resource_name(matches.get_one::<String>("file").unwrap())?;
+    let output_arg = matches.get_one::<String>("output");
+    let export_mime = matches.get_one::<String>("mime-type");
+
+    // Validate export mime-type for dangerous characters if provided
+    if let Some(mime) = export_mime {
+        crate::validate::reject_dangerous_chars(mime, "--mime-type")?;
+    }
+
+    let scope = "https://www.googleapis.com/auth/drive.readonly";
+    let token = auth::get_token(&[scope])
+        .await
+        .map_err(|e| GwsError::Auth(format!("Drive auth failed: {e}")))?;
+
+    let client = crate::client::build_client()?;
+
+    // 1. Fetch file metadata to get name and MIME type
+    let metadata_url = format!(
+        "https://www.googleapis.com/drive/v3/files/{}",
+        crate::validate::encode_path_segment(file_id),
+    );
+    let meta_resp = crate::client::send_with_retry(|| {
+        client
+            .get(&metadata_url)
+            .query(&[("fields", "name,mimeType")])
+            .bearer_auth(&token)
+    })
+    .await
+    .map_err(|e| GwsError::Other(anyhow::anyhow!("Failed to fetch file metadata: {e}")))?;
+
+    if !meta_resp.status().is_success() {
+        let status = meta_resp.status().as_u16();
+        let body = meta_resp.text().await.unwrap_or_default();
+        return Err(GwsError::Api {
+            code: status.into(),
+            message: body,
+            reason: "files_get_metadata_failed".to_string(),
+            enable_url: None,
+        });
+    }
+
+    let meta: Value = meta_resp
+        .json()
+        .await
+        .map_err(|e| GwsError::Other(anyhow::anyhow!("Failed to parse file metadata: {e}")))?;
+
+    let drive_name = meta
+        .get("name")
+        .and_then(|v| v.as_str())
+        .unwrap_or("download");
+    let mime_type = meta
+        .get("mimeType")
+        .and_then(|v| v.as_str())
+        .unwrap_or("");
+
+    // 2. Resolve and validate output path
+    let out_str = output_arg.map(|s| s.as_str()).unwrap_or(drive_name);
+    let out_path = crate::validate::validate_safe_file_path(out_str, "--output")?;
+
+    // 3. Fetch file content — native Google Workspace files require export,
+    //    everything else uses alt=media.
+    let is_google_native = mime_type.starts_with("application/vnd.google-apps.");
+    let bytes = if is_google_native {
+        let mime = export_mime.ok_or_else(|| {
+            GwsError::Validation(format!(
+                "The file is a Google Workspace native file ({mime_type}). \
+                 Provide --mime-type to choose an export format, e.g. \
+                 --mime-type application/pdf or --mime-type text/csv"
+            ))
+        })?;
+        let export_url = format!(
+            "https://www.googleapis.com/drive/v3/files/{}/export",
+            crate::validate::encode_path_segment(file_id),
+        );
+        let resp = crate::client::send_with_retry(|| {
+            client
+                .get(&export_url)
+                .query(&[("mimeType", mime.as_str())])
+                .bearer_auth(&token)
+        })
+        .await
+        .map_err(|e| GwsError::Other(anyhow::anyhow!("Drive export request failed: {e}")))?;
+
+        if !resp.status().is_success() {
+            let status = resp.status().as_u16();
+            let body = resp.text().await.unwrap_or_default();
+            return Err(GwsError::Api {
+                code: status.into(),
+                message: body,
+                reason: "files_export_failed".to_string(),
+                enable_url: None,
+            });
+        }
+        resp.bytes()
+            .await
+            .map_err(|e| GwsError::Other(anyhow::anyhow!("Failed to read export response: {e}")))?
+    } else {
+        let resp = crate::client::send_with_retry(|| {
+            client
+                .get(&metadata_url)
+                .query(&[("alt", "media")])
+                .bearer_auth(&token)
+        })
+        .await
+        .map_err(|e| GwsError::Other(anyhow::anyhow!("Drive download request failed: {e}")))?;
+
+        if !resp.status().is_success() {
+            let status = resp.status().as_u16();
+            let body = resp.text().await.unwrap_or_default();
+            return Err(GwsError::Api {
+                code: status.into(),
+                message: body,
+                reason: "files_get_media_failed".to_string(),
+                enable_url: None,
+            });
+        }
+        resp.bytes()
+            .await
+            .map_err(|e| GwsError::Other(anyhow::anyhow!("Failed to read download response: {e}")))?
+    };
+
+    // 4. Write to the output file
+    std::fs::write(&out_path, &bytes).map_err(|e| {
+        GwsError::Other(anyhow::anyhow!(
+            "Failed to write '{}': {e}",
+            out_path.display()
+        ))
+    })?;
+
+    // 5. Print result as JSON (consistent with other helper output)
+    println!(
+        "{}",
+        serde_json::to_string_pretty(&json!({
+            "file": out_path.display().to_string(),
+            "bytes": bytes.len(),
+            "mimeType": mime_type,
+        }))
+        .unwrap_or_default()
+    );
+
+    Ok(())
 }
 
 fn determine_filename(file_path: &str, name_arg: Option<&str>) -> Result<String, GwsError> {
@@ -142,16 +334,17 @@ fn determine_filename(file_path: &str, name_arg: Option<&str>) -> Result<String,
     }
 }
 
-fn build_metadata(filename: &str, parent_id: Option<&str>) -> Value {
+fn build_metadata(filename: &str, parent_id: Option<&str>) -> Result<Value, GwsError> {
     let mut metadata = json!({
         "name": filename
     });
 
     if let Some(parent) = parent_id {
+        crate::validate::validate_resource_name(parent)?;
         metadata["parents"] = json!([parent]);
     }
 
-    metadata
+    Ok(metadata)
 }
 
 #[cfg(test)]
@@ -182,15 +375,42 @@ mod tests {
 
     #[test]
     fn test_build_metadata_no_parent() {
-        let meta = build_metadata("file.txt", None);
+        let meta = build_metadata("file.txt", None).unwrap();
         assert_eq!(meta["name"], "file.txt");
         assert!(meta.get("parents").is_none());
     }
 
     #[test]
     fn test_build_metadata_with_parent() {
-        let meta = build_metadata("file.txt", Some("folder123"));
+        let meta = build_metadata("file.txt", Some("folder123")).unwrap();
         assert_eq!(meta["name"], "file.txt");
         assert_eq!(meta["parents"][0], "folder123");
+    }
+
+    #[test]
+    fn test_build_metadata_rejects_traversal_parent_id() {
+        assert!(
+            build_metadata("file.txt", Some("../../.ssh/id_rsa")).is_err(),
+            "path traversal in --parent must be rejected"
+        );
+    }
+
+    #[test]
+    fn test_build_metadata_rejects_query_injection_parent_id() {
+        assert!(
+            build_metadata("file.txt", Some("folder?evil=1")).is_err(),
+            "'?' in --parent must be rejected"
+        );
+    }
+
+    #[test]
+    fn test_download_command_injected() {
+        let helper = DriveHelper;
+        let cmd = Command::new("test");
+        let doc = crate::discovery::RestDescription::default();
+        let cmd = helper.inject_commands(cmd, &doc);
+        let names: Vec<_> = cmd.get_subcommands().map(|s| s.get_name()).collect();
+        assert!(names.contains(&"+upload"));
+        assert!(names.contains(&"+download"));
     }
 }
