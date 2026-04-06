@@ -66,8 +66,8 @@ TIPS:
         _sanitize_config: &'a crate::helpers::modelarmor::SanitizeConfig,
     ) -> Pin<Box<dyn Future<Output = Result<bool, GwsError>> + Send + 'a>> {
         Box::pin(async move {
-            if let Some(matches) = matches.subcommand_matches("+write") {
-                let (params_str, body_str, scopes) = build_write_request(matches, doc)?;
+            if let Some(sub_matches) = matches.subcommand_matches("+write") {
+                let (params_str, body_str, scopes) = build_write_request(sub_matches, doc)?;
                 let output_format = matches
                     .get_one::<String>("format")
                     .map(|s| crate::formatter::OutputFormat::from_str(s))
