@@ -235,16 +235,28 @@ async fn handle_download(matches: &ArgMatches) -> Result<(), GwsError> {
 
     let is_google_native = mime_type.starts_with("application/vnd.google-apps.");
 
-    // Sanitize drive filename: Drive allows '/' in names which would create unintended
-    // subdirectories when used as a local filename. Replace with '_'.
+    // Sanitize drive filename: Drive allows '/' and '\' in names which would create unintended
+    // subdirectories on Unix and Windows respectively. Replace both with '_'.
+    // Note: TOCTOU race conditions on path components are a known limitation here;
+    // full mitigation via openat(O_NOFOLLOW) is out of scope for this change.
     let safe_name: String = drive_name
         .chars()
-        .map(|c| if c == '/' { '_' } else { c })
+        .map(|c| if c == '/' || c == '\\' { '_' } else { c })
         .collect();
 
     // 2. Resolve and validate output path
     let out_str = output_arg.map(|s| s.as_str()).unwrap_or(&safe_name);
     let out_path = crate::validate::validate_safe_file_path(out_str, "--output")?;
+
+    // For native Google Workspace files, --mime-type is required. Validate early so that
+    // dry-run output is accurate and the error surfaces before any network or disk I/O.
+    if is_google_native && export_mime.is_none() {
+        return Err(GwsError::Validation(format!(
+            "The file is a Google Workspace native file ({mime_type}). \
+             Provide --mime-type to choose an export format, e.g. \
+             --mime-type application/pdf or --mime-type text/csv"
+        )));
+    }
 
     // Actual MIME type of the file on disk (export format for native files, original otherwise)
     let output_mime = if is_google_native {
@@ -273,13 +285,8 @@ async fn handle_download(matches: &ArgMatches) -> Result<(), GwsError> {
     // 4. Fetch file content — native Google Workspace files require export;
     //    everything else uses alt=media.
     let resp = if is_google_native {
-        let mime = export_mime.as_deref().ok_or_else(|| {
-            GwsError::Validation(format!(
-                "The file is a Google Workspace native file ({mime_type}). \
-                 Provide --mime-type to choose an export format, e.g. \
-                 --mime-type application/pdf or --mime-type text/csv"
-            ))
-        })?;
+        // Safety: export_mime is validated as Some above for native files.
+        let mime = export_mime.as_deref().unwrap();
         let export_url = format!(
             "https://www.googleapis.com/drive/v3/files/{}/export",
             crate::validate::encode_path_segment(file_id),
@@ -358,13 +365,14 @@ async fn handle_download(matches: &ArgMatches) -> Result<(), GwsError> {
         )));
     }
     drop(file);
-    tokio::fs::rename(&tmp_path, &out_path).await.map_err(|e| {
-        GwsError::Other(anyhow::anyhow!(
+    if let Err(e) = tokio::fs::rename(&tmp_path, &out_path).await {
+        let _ = tokio::fs::remove_file(&tmp_path).await;
+        return Err(GwsError::Other(anyhow::anyhow!(
             "Failed to finalize download ('{}' -> '{}'): {e}",
             tmp_path.display(),
             out_path.display()
-        ))
-    })?;
+        )));
+    }
 
     // 6. Print result as JSON (consistent with other helper output)
     println!(
