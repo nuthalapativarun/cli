@@ -178,10 +178,14 @@ TIPS:
 }
 
 async fn handle_download(matches: &ArgMatches) -> Result<(), GwsError> {
+    use futures_util::StreamExt;
+    use tokio::io::AsyncWriteExt;
+
     let file_id =
         crate::validate::validate_resource_name(matches.get_one::<String>("file").unwrap())?;
     let output_arg = matches.get_one::<String>("output");
     let export_mime = matches.get_one::<String>("mime-type");
+    let dry_run = matches.get_flag("dry-run");
 
     // Validate export mime-type for dangerous characters if provided
     if let Some(mime) = export_mime {
@@ -214,7 +218,7 @@ async fn handle_download(matches: &ArgMatches) -> Result<(), GwsError> {
         let body = meta_resp.text().await.unwrap_or_default();
         return Err(GwsError::Api {
             code: status.into(),
-            message: body,
+            message: crate::output::sanitize_for_terminal(&body),
             reason: "files_get_metadata_failed".to_string(),
             enable_url: None,
         });
@@ -238,10 +242,27 @@ async fn handle_download(matches: &ArgMatches) -> Result<(), GwsError> {
     let out_str = output_arg.map(|s| s.as_str()).unwrap_or(drive_name);
     let out_path = crate::validate::validate_safe_file_path(out_str, "--output")?;
 
-    // 3. Fetch file content — native Google Workspace files require export,
-    //    everything else uses alt=media.
+    // 3. Dry-run: print what would be done and exit without network or disk I/O
+    if dry_run {
+        println!(
+            "{}",
+            serde_json::to_string_pretty(&json!({
+                "dryRun": true,
+                "fileId": file_id,
+                "driveName": drive_name,
+                "mimeType": mime_type,
+                "output": out_path.display().to_string(),
+                "exportMimeType": export_mime,
+            }))
+            .unwrap_or_default()
+        );
+        return Ok(());
+    }
+
+    // 4. Fetch file content and stream it to disk — native Google Workspace
+    //    files require export; everything else uses alt=media.
     let is_google_native = mime_type.starts_with("application/vnd.google-apps.");
-    let bytes = if is_google_native {
+    let resp = if is_google_native {
         let mime = export_mime.ok_or_else(|| {
             GwsError::Validation(format!(
                 "The file is a Google Workspace native file ({mime_type}). \
@@ -253,7 +274,7 @@ async fn handle_download(matches: &ArgMatches) -> Result<(), GwsError> {
             "https://www.googleapis.com/drive/v3/files/{}/export",
             crate::validate::encode_path_segment(file_id),
         );
-        let resp = crate::client::send_with_retry(|| {
+        let r = crate::client::send_with_retry(|| {
             client
                 .get(&export_url)
                 .query(&[("mimeType", mime.as_str())])
@@ -262,21 +283,19 @@ async fn handle_download(matches: &ArgMatches) -> Result<(), GwsError> {
         .await
         .map_err(|e| GwsError::Other(anyhow::anyhow!("Drive export request failed: {e}")))?;
 
-        if !resp.status().is_success() {
-            let status = resp.status().as_u16();
-            let body = resp.text().await.unwrap_or_default();
+        if !r.status().is_success() {
+            let status = r.status().as_u16();
+            let body = r.text().await.unwrap_or_default();
             return Err(GwsError::Api {
                 code: status.into(),
-                message: body,
+                message: crate::output::sanitize_for_terminal(&body),
                 reason: "files_export_failed".to_string(),
                 enable_url: None,
             });
         }
-        resp.bytes()
-            .await
-            .map_err(|e| GwsError::Other(anyhow::anyhow!("Failed to read export response: {e}")))?
+        r
     } else {
-        let resp = crate::client::send_with_retry(|| {
+        let r = crate::client::send_with_retry(|| {
             client
                 .get(&metadata_url)
                 .query(&[("alt", "media")])
@@ -285,35 +304,52 @@ async fn handle_download(matches: &ArgMatches) -> Result<(), GwsError> {
         .await
         .map_err(|e| GwsError::Other(anyhow::anyhow!("Drive download request failed: {e}")))?;
 
-        if !resp.status().is_success() {
-            let status = resp.status().as_u16();
-            let body = resp.text().await.unwrap_or_default();
+        if !r.status().is_success() {
+            let status = r.status().as_u16();
+            let body = r.text().await.unwrap_or_default();
             return Err(GwsError::Api {
                 code: status.into(),
-                message: body,
+                message: crate::output::sanitize_for_terminal(&body),
                 reason: "files_get_media_failed".to_string(),
                 enable_url: None,
             });
         }
-        resp.bytes()
-            .await
-            .map_err(|e| GwsError::Other(anyhow::anyhow!("Failed to read download response: {e}")))?
+        r
     };
 
-    // 4. Write to the output file
-    std::fs::write(&out_path, &bytes).map_err(|e| {
+    // 5. Stream response body to file to avoid OOM on large downloads
+    let mut file = tokio::fs::File::create(&out_path).await.map_err(|e| {
         GwsError::Other(anyhow::anyhow!(
-            "Failed to write '{}': {e}",
+            "Failed to create '{}': {e}",
+            out_path.display()
+        ))
+    })?;
+    let mut byte_count = 0usize;
+    let mut stream = resp.bytes_stream();
+    while let Some(chunk) = stream.next().await {
+        let chunk =
+            chunk.map_err(|e| GwsError::Other(anyhow::anyhow!("Download stream error: {e}")))?;
+        byte_count += chunk.len();
+        file.write_all(&chunk).await.map_err(|e| {
+            GwsError::Other(anyhow::anyhow!(
+                "Failed to write to '{}': {e}",
+                out_path.display()
+            ))
+        })?;
+    }
+    file.flush().await.map_err(|e| {
+        GwsError::Other(anyhow::anyhow!(
+            "Failed to flush '{}': {e}",
             out_path.display()
         ))
     })?;
 
-    // 5. Print result as JSON (consistent with other helper output)
+    // 6. Print result as JSON (consistent with other helper output)
     println!(
         "{}",
         serde_json::to_string_pretty(&json!({
             "file": out_path.display().to_string(),
-            "bytes": bytes.len(),
+            "bytes": byte_count,
             "mimeType": mime_type,
         }))
         .unwrap_or_default()
