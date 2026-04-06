@@ -48,3 +48,10 @@ docs/plans/
 # Generated
 demo.mp4
 download.html
+
+.claude
+# Cursor — ignore local workspace; keep shared MCP template tracked
+.cursor/*
+!.cursor/mcp.json
+_bmad
+_bmad-output

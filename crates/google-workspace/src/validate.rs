@@ -476,6 +476,31 @@ mod tests {
         assert!(validate_safe_dir_path("/usr/local").is_err());
     }
 
+    #[test]
+    fn test_dir_path_rejects_null_bytes() {
+        assert!(validate_safe_dir_path("foo\0bar").is_err());
+    }
+
+    #[test]
+    fn test_dir_path_rejects_control_chars() {
+        assert!(validate_safe_dir_path("foo\x01bar").is_err());
+    }
+
+    #[test]
+    fn test_dir_path_rejects_zero_width_chars() {
+        assert!(validate_safe_dir_path("foo\u{200B}bar").is_err());
+    }
+
+    #[test]
+    fn test_dir_path_rejects_rtl_override() {
+        assert!(validate_safe_dir_path("foo\u{202E}bar").is_err());
+    }
+
+    #[test]
+    fn test_dir_path_rejects_unicode_line_separator() {
+        assert!(validate_safe_dir_path("foo\u{2028}bar").is_err());
+    }
+
     // --- reject_dangerous_chars ---
 
     #[test]
@@ -795,6 +820,13 @@ mod tests {
     fn test_file_path_rejects_control_chars() {
         let result = validate_safe_file_path("file\x00.txt", "--output");
         assert!(result.is_err(), "null bytes should be rejected");
+    }
+
+    #[test]
+    fn test_file_path_rejects_dangerous_unicode() {
+        assert!(validate_safe_file_path("f\u{200B}ile.txt", "--upload").is_err());
+        assert!(validate_safe_file_path("f\u{202E}ile.txt", "--output").is_err());
+        assert!(validate_safe_file_path("f\u{2028}ile.txt", "--attach").is_err());
     }
 
     #[test]
