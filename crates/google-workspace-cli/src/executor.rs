@@ -828,8 +828,8 @@ pub fn api_error_from_response(status: reqwest::StatusCode, body: &str) -> GwsEr
             let message = err_obj
                 .get("message")
                 .and_then(|m| m.as_str())
-                .unwrap_or("Unknown error")
-                .to_string();
+                .map(sanitize_for_terminal)
+                .unwrap_or_else(|| "Unknown error".to_string());
             let reason = err_obj
                 .get("errors")
                 .and_then(|e| e.as_array())
@@ -837,8 +837,8 @@ pub fn api_error_from_response(status: reqwest::StatusCode, body: &str) -> GwsEr
                 .and_then(|e| e.get("reason"))
                 .and_then(|r| r.as_str())
                 .or_else(|| err_obj.get("reason").and_then(|r| r.as_str()))
-                .unwrap_or("unknown")
-                .to_string();
+                .map(sanitize_for_terminal)
+                .unwrap_or_else(|| "unknown".to_string());
             let enable_url = if reason == "accessNotConfigured" {
                 extract_enable_url(&message)
             } else {

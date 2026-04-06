@@ -337,9 +337,11 @@ async fn handle_download(matches: &ArgMatches) -> Result<(), GwsError> {
     };
 
     // 5. Stream to a temp file first; rename on success to avoid leaving partial files on disk.
+    // Include a random suffix to prevent symlink attacks in world-writable directories.
     let tmp_path = out_path.with_file_name(format!(
-        ".{}.tmp",
-        out_path.file_name().unwrap_or_default().to_string_lossy()
+        ".{}.{:016x}.tmp",
+        out_path.file_name().unwrap_or_default().to_string_lossy(),
+        rand::random::<u64>()
     ));
     let mut file = tokio::fs::File::create(&tmp_path).await.map_err(|e| {
         GwsError::Other(anyhow::anyhow!(
