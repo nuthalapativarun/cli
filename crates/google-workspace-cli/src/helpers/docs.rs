@@ -120,7 +120,8 @@ fn build_write_request(
     matches: &ArgMatches,
     doc: &crate::discovery::RestDescription,
 ) -> Result<(String, String, Vec<String>), GwsError> {
-    let document_id = matches.get_one::<String>("document").unwrap();
+    let document_id =
+        crate::validate::validate_resource_name(matches.get_one::<String>("document").unwrap())?;
     let text = matches.get_one::<String>("text").unwrap();
 
     let documents_res = doc
@@ -202,5 +203,21 @@ mod tests {
         assert!(body.contains("hello world"));
         assert!(body.contains("endOfSegmentLocation"));
         assert_eq!(scopes[0], "https://scope");
+    }
+
+    #[test]
+    fn test_build_write_request_rejects_traversal_document_id() {
+        let doc = make_mock_doc();
+        let matches = make_matches_write(&["test", "--document", "../../.ssh/id_rsa", "--text", "x"]);
+        let result = build_write_request(&matches, &doc);
+        assert!(result.is_err(), "path traversal in --document must be rejected");
+    }
+
+    #[test]
+    fn test_build_write_request_rejects_query_injection_document_id() {
+        let doc = make_mock_doc();
+        let matches = make_matches_write(&["test", "--document", "abc?evil=1", "--text", "x"]);
+        let result = build_write_request(&matches, &doc);
+        assert!(result.is_err(), "'?' in --document must be rejected");
     }
 }

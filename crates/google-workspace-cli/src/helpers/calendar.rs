@@ -423,7 +423,8 @@ fn build_insert_request(
     matches: &ArgMatches,
     doc: &crate::discovery::RestDescription,
 ) -> Result<(String, String, Vec<String>), GwsError> {
-    let calendar_id = matches.get_one::<String>("calendar").unwrap();
+    let calendar_id =
+        crate::validate::validate_resource_name(matches.get_one::<String>("calendar").unwrap())?;
     let summary = matches.get_one::<String>("summary").unwrap();
     let start = matches.get_one::<String>("start").unwrap();
     let end = matches.get_one::<String>("end").unwrap();
@@ -574,6 +575,26 @@ mod tests {
         assert!(body.contains("Meeting"));
         assert!(body.contains("2024-01-01T10:00:00Z"));
         assert_eq!(scopes[0], "https://scope");
+    }
+
+    #[test]
+    fn test_build_insert_request_rejects_traversal_calendar_id() {
+        let doc = make_mock_doc();
+        let matches = make_matches_insert(&[
+            "test",
+            "--calendar",
+            "../../.ssh/id_rsa",
+            "--summary",
+            "X",
+            "--start",
+            "2024-01-01T10:00:00Z",
+            "--end",
+            "2024-01-01T11:00:00Z",
+        ]);
+        assert!(
+            build_insert_request(&matches, &doc).is_err(),
+            "path traversal in --calendar must be rejected"
+        );
     }
 
     #[test]

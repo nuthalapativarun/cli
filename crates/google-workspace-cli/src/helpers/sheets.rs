@@ -209,6 +209,8 @@ fn build_append_request(
     config: &AppendConfig,
     doc: &crate::discovery::RestDescription,
 ) -> Result<(String, String, Vec<String>), GwsError> {
+    crate::validate::validate_resource_name(&config.spreadsheet_id)?;
+
     let spreadsheets_res = doc
         .resources
         .get("spreadsheets")
@@ -240,6 +242,8 @@ fn build_read_request(
     config: &ReadConfig,
     doc: &crate::discovery::RestDescription,
 ) -> Result<(String, Vec<String>), GwsError> {
+    crate::validate::validate_resource_name(&config.spreadsheet_id)?;
+
     // ... resource lookup omitted for brevity ...
     let spreadsheets_res = doc
         .resources
@@ -308,6 +312,7 @@ pub fn parse_append_args(matches: &ArgMatches) -> AppendConfig {
         values,
     }
 }
+
 
 /// Configuration for reading values from a spreadsheet.
 pub struct ReadConfig {
@@ -521,5 +526,32 @@ mod tests {
         let subcommands: Vec<_> = cmd.get_subcommands().map(|s| s.get_name()).collect();
         assert!(subcommands.contains(&"+append"));
         assert!(subcommands.contains(&"+read"));
+    }
+
+    #[test]
+    fn test_build_append_request_rejects_traversal() {
+        let doc = make_mock_doc();
+        let config = AppendConfig {
+            spreadsheet_id: "../../.ssh/id_rsa".to_string(),
+            range: "A1".to_string(),
+            values: vec![vec!["x".to_string()]],
+        };
+        assert!(
+            build_append_request(&config, &doc).is_err(),
+            "path traversal in spreadsheet ID must be rejected"
+        );
+    }
+
+    #[test]
+    fn test_build_read_request_rejects_query_injection() {
+        let doc = make_mock_doc();
+        let config = ReadConfig {
+            spreadsheet_id: "abc?evil=1".to_string(),
+            range: "A1:B2".to_string(),
+        };
+        assert!(
+            build_read_request(&config, &doc).is_err(),
+            "'?' in spreadsheet ID must be rejected"
+        );
     }
 }

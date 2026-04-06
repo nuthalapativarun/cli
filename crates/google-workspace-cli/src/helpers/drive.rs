@@ -91,7 +91,7 @@ TIPS:
                 })?;
 
                 // Build metadata
-                let metadata = build_metadata(&filename, parent_id.map(|s| s.as_str()));
+                let metadata = build_metadata(&filename, parent_id.map(|s| s.as_str()))?;
 
                 let body_str = metadata.to_string();
 
@@ -142,16 +142,17 @@ fn determine_filename(file_path: &str, name_arg: Option<&str>) -> Result<String,
     }
 }
 
-fn build_metadata(filename: &str, parent_id: Option<&str>) -> Value {
+fn build_metadata(filename: &str, parent_id: Option<&str>) -> Result<Value, GwsError> {
     let mut metadata = json!({
         "name": filename
     });
 
     if let Some(parent) = parent_id {
+        crate::validate::validate_resource_name(parent)?;
         metadata["parents"] = json!([parent]);
     }
 
-    metadata
+    Ok(metadata)
 }
 
 #[cfg(test)]
@@ -182,15 +183,31 @@ mod tests {
 
     #[test]
     fn test_build_metadata_no_parent() {
-        let meta = build_metadata("file.txt", None);
+        let meta = build_metadata("file.txt", None).unwrap();
         assert_eq!(meta["name"], "file.txt");
         assert!(meta.get("parents").is_none());
     }
 
     #[test]
     fn test_build_metadata_with_parent() {
-        let meta = build_metadata("file.txt", Some("folder123"));
+        let meta = build_metadata("file.txt", Some("folder123")).unwrap();
         assert_eq!(meta["name"], "file.txt");
         assert_eq!(meta["parents"][0], "folder123");
+    }
+
+    #[test]
+    fn test_build_metadata_rejects_traversal_parent_id() {
+        assert!(
+            build_metadata("file.txt", Some("../../.ssh/id_rsa")).is_err(),
+            "path traversal in --parent must be rejected"
+        );
+    }
+
+    #[test]
+    fn test_build_metadata_rejects_query_injection_parent_id() {
+        assert!(
+            build_metadata("file.txt", Some("folder?evil=1")).is_err(),
+            "'?' in --parent must be rejected"
+        );
     }
 }
