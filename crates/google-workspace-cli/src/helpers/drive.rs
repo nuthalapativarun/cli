@@ -199,10 +199,10 @@ async fn handle_download(matches: &ArgMatches) -> Result<(), GwsError> {
         println!(
             "{}",
             serde_json::to_string_pretty(&json!({
-                "dryRun": true,
-                "fileId": file_id,
+                "dry_run": true,
+                "file_id": file_id,
                 "output": out_display,
-                "exportMimeType": export_mime,
+                "export_mime_type": export_mime,
             }))
             .unwrap_or_default()
         );
@@ -261,13 +261,26 @@ async fn handle_download(matches: &ArgMatches) -> Result<(), GwsError> {
         )));
     }
 
-    // Sanitize drive filename: Drive allows '/' and '\' in names which would create unintended
-    // subdirectories on Unix and Windows respectively. Replace both with '_'.
-    // Note: TOCTOU race conditions on path components are a known limitation here;
+    // Sanitize drive filename for use as a local path component:
+    // - Replace Unix/Windows path separators ('/', '\') to prevent subdirectory traversal.
+    // - Replace Windows-reserved characters (':', '*', '?', '"', '<', '>', '|') that
+    //   cause file creation failures on Windows.
+    // - Strip control characters (Cc category) and dangerous Unicode (Cf/bidi/zero-width)
+    //   that could cause terminal injection or misleading output.
+    // Note: TOCTOU race conditions on path components are a known limitation;
     // full mitigation via openat(O_NOFOLLOW) is out of scope for this change.
     let safe_name: String = drive_name
         .chars()
-        .map(|c| if c == '/' || c == '\\' { '_' } else { c })
+        .map(|c| {
+            if matches!(c, '/' | '\\' | ':' | '*' | '?' | '"' | '<' | '>' | '|')
+                || c.is_control()
+                || crate::validate::is_dangerous_unicode(c)
+            {
+                '_'
+            } else {
+                c
+            }
+        })
         .collect();
 
     // 3. Resolve and validate output path
@@ -383,9 +396,9 @@ async fn handle_download(matches: &ArgMatches) -> Result<(), GwsError> {
     println!(
         "{}",
         serde_json::to_string_pretty(&json!({
-            "file": out_path.display().to_string(),
+            "saved_file": out_path.display().to_string(),
             "bytes": byte_count,
-            "mimeType": output_mime,
+            "mime_type": output_mime,
         }))
         .unwrap_or_default()
     );

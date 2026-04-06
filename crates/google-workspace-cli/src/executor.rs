@@ -855,7 +855,7 @@ pub fn api_error_from_response(status: reqwest::StatusCode, body: &str) -> GwsEr
     GwsError::Api {
         code: status.as_u16(),
         message: crate::output::sanitize_for_terminal(body),
-        reason: "unknown".to_string(),
+        reason: "httpError".to_string(),
         enable_url: None,
     }
 }
