@@ -109,8 +109,8 @@ TIPS:
         _sanitize_config: &'a crate::helpers::modelarmor::SanitizeConfig,
     ) -> Pin<Box<dyn Future<Output = Result<bool, GwsError>> + Send + 'a>> {
         Box::pin(async move {
-            if let Some(sub_matches) = matches.subcommand_matches("+append") {
-                let config = parse_append_args(sub_matches);
+            if let Some(matches) = matches.subcommand_matches("+append") {
+                let config = parse_append_args(matches);
                 let (params_str, body_str, scopes) = build_append_request(&config, doc)?;
                 let output_format = matches
                     .get_one::<String>("format")
@@ -161,8 +161,8 @@ TIPS:
                 return Ok(true);
             }
 
-            if let Some(sub_matches) = matches.subcommand_matches("+read") {
-                let config = parse_read_args(sub_matches);
+            if let Some(matches) = matches.subcommand_matches("+read") {
+                let config = parse_read_args(matches);
                 let (params_str, scopes) = build_read_request(&config, doc)?;
                 let output_format = matches
                     .get_one::<String>("format")
