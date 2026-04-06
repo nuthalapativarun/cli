@@ -377,12 +377,10 @@ async fn handle_download(matches: &ArgMatches) -> Result<(), GwsError> {
         )));
     }
     drop(file);
-    // Remove existing destination first for cross-platform consistency:
-    // tokio::fs::rename overwrites atomically on Unix but fails if the
-    // destination already exists on Windows. The remove + rename sequence
-    // introduces a small TOCTOU window; full mitigation via openat(O_NOFOLLOW)
-    // is considered out of scope for this change.
-    let _ = tokio::fs::remove_file(&out_path).await;
+    // tokio::fs::rename overwrites the destination atomically on Unix, and on
+    // Windows it uses MOVEFILE_REPLACE_EXISTING (supported since Rust 1.26), so
+    // a separate remove_file step is unnecessary and would only widen the window
+    // where neither the old nor new file exists at the target path.
     if let Err(e) = tokio::fs::rename(&tmp_path, &out_path).await {
         let _ = tokio::fs::remove_file(&tmp_path).await;
         return Err(GwsError::Other(anyhow::anyhow!(
