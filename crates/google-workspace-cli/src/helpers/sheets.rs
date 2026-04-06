@@ -112,6 +112,10 @@ TIPS:
             if let Some(matches) = matches.subcommand_matches("+append") {
                 let config = parse_append_args(matches);
                 let (params_str, body_str, scopes) = build_append_request(&config, doc)?;
+                let output_format = matches
+                    .get_one::<String>("format")
+                    .map(|s| crate::formatter::OutputFormat::from_str(s))
+                    .unwrap_or_default();
 
                 let scope_strs: Vec<&str> = scopes.iter().map(|s| s.as_str()).collect();
                 let (token, auth_method) = match auth::get_token(&scope_strs).await {
@@ -149,7 +153,7 @@ TIPS:
                     &pagination,
                     None,
                     &crate::helpers::modelarmor::SanitizeMode::Warn,
-                    &crate::formatter::OutputFormat::default(),
+                    &output_format,
                     false,
                 )
                 .await?;
@@ -160,6 +164,10 @@ TIPS:
             if let Some(matches) = matches.subcommand_matches("+read") {
                 let config = parse_read_args(matches);
                 let (params_str, scopes) = build_read_request(&config, doc)?;
+                let output_format = matches
+                    .get_one::<String>("format")
+                    .map(|s| crate::formatter::OutputFormat::from_str(s))
+                    .unwrap_or_default();
 
                 // Re-find method
                 let spreadsheets_res = doc.resources.get("spreadsheets").ok_or_else(|| {
@@ -192,7 +200,7 @@ TIPS:
                     &executor::PaginationConfig::default(),
                     None,
                     &crate::helpers::modelarmor::SanitizeMode::Warn,
-                    &crate::formatter::OutputFormat::default(),
+                    &output_format,
                     false,
                 )
                 .await?;
