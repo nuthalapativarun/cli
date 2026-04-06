@@ -192,6 +192,23 @@ async fn handle_download(matches: &ArgMatches) -> Result<(), GwsError> {
         crate::validate::reject_dangerous_chars(mime, "--mime-type")?;
     }
 
+    // 1. Dry-run: short-circuit before any auth or network I/O, consistent with
+    //    how +upload handles --dry-run (auth is attempted optionally, then skipped).
+    if dry_run {
+        let out_display = output_arg.map(|s| s.as_str()).unwrap_or("<Drive filename>");
+        println!(
+            "{}",
+            serde_json::to_string_pretty(&json!({
+                "dryRun": true,
+                "fileId": file_id,
+                "output": out_display,
+                "exportMimeType": export_mime,
+            }))
+            .unwrap_or_default()
+        );
+        return Ok(());
+    }
+
     let scope = "https://www.googleapis.com/auth/drive.readonly";
     let token = auth::get_token(&[scope])
         .await
@@ -199,7 +216,7 @@ async fn handle_download(matches: &ArgMatches) -> Result<(), GwsError> {
 
     let client = crate::client::build_client()?;
 
-    // 1. Fetch file metadata to get name and MIME type
+    // 2. Fetch file metadata to get name and MIME type
     let metadata_url = format!(
         "https://www.googleapis.com/drive/v3/files/{}",
         crate::validate::encode_path_segment(file_id),
@@ -216,7 +233,7 @@ async fn handle_download(matches: &ArgMatches) -> Result<(), GwsError> {
     if !meta_resp.status().is_success() {
         let status = meta_resp.status();
         let body = meta_resp.text().await.unwrap_or_default();
-        return Err(parse_google_api_error(status, &body));
+        return Err(executor::api_error_from_response(status, &body));
     }
 
     let meta: Value = meta_resp
@@ -235,6 +252,15 @@ async fn handle_download(matches: &ArgMatches) -> Result<(), GwsError> {
 
     let is_google_native = mime_type.starts_with("application/vnd.google-apps.");
 
+    // For native Google Workspace files, --mime-type is required.
+    if is_google_native && export_mime.is_none() {
+        return Err(GwsError::Validation(format!(
+            "The file is a Google Workspace native file ({mime_type}). \
+             Provide --mime-type to choose an export format, e.g. \
+             --mime-type application/pdf or --mime-type text/csv"
+        )));
+    }
+
     // Sanitize drive filename: Drive allows '/' and '\' in names which would create unintended
     // subdirectories on Unix and Windows respectively. Replace both with '_'.
     // Note: TOCTOU race conditions on path components are a known limitation here;
@@ -244,19 +270,9 @@ async fn handle_download(matches: &ArgMatches) -> Result<(), GwsError> {
         .map(|c| if c == '/' || c == '\\' { '_' } else { c })
         .collect();
 
-    // 2. Resolve and validate output path
+    // 3. Resolve and validate output path
     let out_str = output_arg.map(|s| s.as_str()).unwrap_or(&safe_name);
     let out_path = crate::validate::validate_safe_file_path(out_str, "--output")?;
-
-    // For native Google Workspace files, --mime-type is required. Validate early so that
-    // dry-run output is accurate and the error surfaces before any network or disk I/O.
-    if is_google_native && export_mime.is_none() {
-        return Err(GwsError::Validation(format!(
-            "The file is a Google Workspace native file ({mime_type}). \
-             Provide --mime-type to choose an export format, e.g. \
-             --mime-type application/pdf or --mime-type text/csv"
-        )));
-    }
 
     // Actual MIME type of the file on disk (export format for native files, original otherwise)
     let output_mime = if is_google_native {
@@ -264,23 +280,6 @@ async fn handle_download(matches: &ArgMatches) -> Result<(), GwsError> {
     } else {
         mime_type.to_string()
     };
-
-    // 3. Dry-run: print what would be done and exit without network or disk I/O
-    if dry_run {
-        println!(
-            "{}",
-            serde_json::to_string_pretty(&json!({
-                "dryRun": true,
-                "fileId": file_id,
-                "driveName": drive_name,
-                "mimeType": output_mime,
-                "output": out_path.display().to_string(),
-                "exportMimeType": export_mime,
-            }))
-            .unwrap_or_default()
-        );
-        return Ok(());
-    }
 
     // 4. Fetch file content — native Google Workspace files require export;
     //    everything else uses alt=media.
@@ -303,7 +302,7 @@ async fn handle_download(matches: &ArgMatches) -> Result<(), GwsError> {
         if !r.status().is_success() {
             let status = r.status();
             let body = r.text().await.unwrap_or_default();
-            return Err(parse_google_api_error(status, &body));
+            return Err(executor::api_error_from_response(status, &body));
         }
         r
     } else {
@@ -319,7 +318,7 @@ async fn handle_download(matches: &ArgMatches) -> Result<(), GwsError> {
         if !r.status().is_success() {
             let status = r.status();
             let body = r.text().await.unwrap_or_default();
-            return Err(parse_google_api_error(status, &body));
+            return Err(executor::api_error_from_response(status, &body));
         }
         r
     };
@@ -365,6 +364,12 @@ async fn handle_download(matches: &ArgMatches) -> Result<(), GwsError> {
         )));
     }
     drop(file);
+    // Remove existing destination first for cross-platform consistency:
+    // tokio::fs::rename overwrites atomically on Unix but fails if the
+    // destination already exists on Windows. The remove + rename sequence
+    // introduces a small TOCTOU window; full mitigation via openat(O_NOFOLLOW)
+    // is considered out of scope for this change.
+    let _ = tokio::fs::remove_file(&out_path).await;
     if let Err(e) = tokio::fs::rename(&tmp_path, &out_path).await {
         let _ = tokio::fs::remove_file(&tmp_path).await;
         return Err(GwsError::Other(anyhow::anyhow!(
@@ -386,52 +391,6 @@ async fn handle_download(matches: &ArgMatches) -> Result<(), GwsError> {
     );
 
     Ok(())
-}
-
-/// Parse a Google API error response body into a [`GwsError::Api`], extracting
-/// the real `reason`, `message`, and `enable_url` from the JSON payload so that
-/// specialised error handling in `error.rs` (e.g. `accessNotConfigured` hints)
-/// continues to work correctly.
-fn parse_google_api_error(status: reqwest::StatusCode, body: &str) -> GwsError {
-    if let Ok(error_json) = serde_json::from_str::<Value>(body) {
-        if let Some(err_obj) = error_json.get("error") {
-            let code = err_obj
-                .get("code")
-                .and_then(|c| c.as_u64())
-                .unwrap_or(status.as_u16() as u64) as u16;
-            let message = err_obj
-                .get("message")
-                .and_then(|m| m.as_str())
-                .unwrap_or("Unknown error")
-                .to_string();
-            let reason = err_obj
-                .get("errors")
-                .and_then(|e| e.as_array())
-                .and_then(|arr| arr.first())
-                .and_then(|e| e.get("reason"))
-                .and_then(|r| r.as_str())
-                .or_else(|| err_obj.get("reason").and_then(|r| r.as_str()))
-                .unwrap_or("unknown")
-                .to_string();
-            let enable_url = if reason == "accessNotConfigured" {
-                executor::extract_enable_url(&message)
-            } else {
-                None
-            };
-            return GwsError::Api {
-                code,
-                message,
-                reason,
-                enable_url,
-            };
-        }
-    }
-    GwsError::Api {
-        code: status.as_u16(),
-        message: crate::output::sanitize_for_terminal(body),
-        reason: "unknown".to_string(),
-        enable_url: None,
-    }
 }
 
 fn determine_filename(file_path: &str, name_arg: Option<&str>) -> Result<String, GwsError> {

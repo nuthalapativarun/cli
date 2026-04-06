@@ -812,6 +812,54 @@ fn handle_error_response<T>(
     })
 }
 
+/// Parse a Google API error response body into a [`GwsError`].
+///
+/// Extracts the real `reason`, `message`, and `enable_url` from the JSON
+/// payload so that specialised error handling (e.g. `accessNotConfigured`
+/// hints) works correctly in callers that perform their own HTTP requests
+/// outside of [`execute_method`].
+pub fn api_error_from_response(status: reqwest::StatusCode, body: &str) -> GwsError {
+    if let Ok(error_json) = serde_json::from_str::<Value>(body) {
+        if let Some(err_obj) = error_json.get("error") {
+            let code = err_obj
+                .get("code")
+                .and_then(|c| c.as_u64())
+                .unwrap_or(status.as_u16() as u64) as u16;
+            let message = err_obj
+                .get("message")
+                .and_then(|m| m.as_str())
+                .unwrap_or("Unknown error")
+                .to_string();
+            let reason = err_obj
+                .get("errors")
+                .and_then(|e| e.as_array())
+                .and_then(|arr| arr.first())
+                .and_then(|e| e.get("reason"))
+                .and_then(|r| r.as_str())
+                .or_else(|| err_obj.get("reason").and_then(|r| r.as_str()))
+                .unwrap_or("unknown")
+                .to_string();
+            let enable_url = if reason == "accessNotConfigured" {
+                extract_enable_url(&message)
+            } else {
+                None
+            };
+            return GwsError::Api {
+                code,
+                message,
+                reason,
+                enable_url,
+            };
+        }
+    }
+    GwsError::Api {
+        code: status.as_u16(),
+        message: crate::output::sanitize_for_terminal(body),
+        reason: "unknown".to_string(),
+        enable_url: None,
+    }
+}
+
 /// Resolves the MIME type for the uploaded media content.
 ///
 /// Priority:
