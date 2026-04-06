@@ -168,7 +168,7 @@ TIPS:
             }
 
             if let Some(matches) = matches.subcommand_matches("+download") {
-                handle_download(matches).await?;
+                handle_download(doc, matches).await?;
                 return Ok(true);
             }
 
@@ -177,7 +177,10 @@ TIPS:
     }
 }
 
-async fn handle_download(matches: &ArgMatches) -> Result<(), GwsError> {
+async fn handle_download(
+    doc: &crate::discovery::RestDescription,
+    matches: &ArgMatches,
+) -> Result<(), GwsError> {
     use futures_util::StreamExt;
     use tokio::io::AsyncWriteExt;
 
@@ -209,23 +212,55 @@ async fn handle_download(matches: &ArgMatches) -> Result<(), GwsError> {
         return Ok(());
     }
 
-    let scope = "https://www.googleapis.com/auth/drive.readonly";
-    let token = auth::get_token(&[scope])
+    // Resolve methods and scopes from the Discovery Document so that the correct
+    // OAuth scopes are used and any custom root_url (proxy, VPC-SC, etc.) is respected.
+    let files_res = doc
+        .resources
+        .get("files")
+        .ok_or_else(|| GwsError::Discovery("Resource 'files' not found".to_string()))?;
+    let get_method = files_res
+        .methods
+        .get("get")
+        .ok_or_else(|| GwsError::Discovery("Method 'files.get' not found".to_string()))?;
+    let export_method = files_res
+        .methods
+        .get("export")
+        .ok_or_else(|| GwsError::Discovery("Method 'files.export' not found".to_string()))?;
+
+    // Union scopes from files.get and files.export to cover both download paths.
+    let mut scope_set: std::collections::HashSet<&str> = std::collections::HashSet::new();
+    for s in &get_method.scopes {
+        scope_set.insert(s.as_str());
+    }
+    for s in &export_method.scopes {
+        scope_set.insert(s.as_str());
+    }
+    let scopes: Vec<&str> = scope_set.into_iter().collect();
+
+    let token = auth::get_token(&scopes)
         .await
         .map_err(|e| GwsError::Auth(format!("Drive auth failed: {e}")))?;
+
+    // Resolve base URL from the Discovery Document (respects custom root_url / proxy configs).
+    let base_url = doc
+        .base_url
+        .clone()
+        .unwrap_or_else(|| format!("{}{}", doc.root_url, doc.service_path));
 
     let client = crate::client::build_client()?;
 
     // 2. Fetch file metadata to get name and MIME type
-    let metadata_url = format!(
-        "https://www.googleapis.com/drive/v3/files/{}",
-        crate::validate::encode_path_segment(file_id),
-    );
+    let encoded_id = crate::validate::encode_path_segment(file_id);
+    let metadata_url = format!("{}files/{}", base_url, encoded_id);
     let meta_resp = crate::client::send_with_retry(|| {
-        client
+        let mut req = client
             .get(&metadata_url)
             .query(&[("fields", "name,mimeType")])
-            .bearer_auth(&token)
+            .bearer_auth(&token);
+        if let Some(qp) = crate::auth::get_quota_project() {
+            req = req.header("x-goog-user-project", qp);
+        }
+        req
     })
     .await
     .map_err(|e| GwsError::Other(anyhow::anyhow!("Failed to fetch file metadata: {e}")))?;
@@ -233,7 +268,7 @@ async fn handle_download(matches: &ArgMatches) -> Result<(), GwsError> {
     if !meta_resp.status().is_success() {
         let status = meta_resp.status();
         let body = meta_resp.text().await.unwrap_or_default();
-        return Err(executor::api_error_from_response(status, &body));
+        return Err(executor::api_error_from_response(status, &body, &executor::AuthMethod::OAuth));
     }
 
     let meta: Value = meta_resp
@@ -299,15 +334,17 @@ async fn handle_download(matches: &ArgMatches) -> Result<(), GwsError> {
     let resp = if is_google_native {
         // Safety: export_mime is validated as Some above for native files.
         let mime = export_mime.as_deref().unwrap();
-        let export_url = format!(
-            "https://www.googleapis.com/drive/v3/files/{}/export",
-            crate::validate::encode_path_segment(file_id),
-        );
+        // Build export URL from Discovery Document base URL (respects custom root_url).
+        let export_url = format!("{}files/{}/export", base_url, encoded_id);
         let r = crate::client::send_with_retry(|| {
-            client
+            let mut req = client
                 .get(&export_url)
                 .query(&[("mimeType", mime)])
-                .bearer_auth(&token)
+                .bearer_auth(&token);
+            if let Some(qp) = crate::auth::get_quota_project() {
+                req = req.header("x-goog-user-project", qp);
+            }
+            req
         })
         .await
         .map_err(|e| GwsError::Other(anyhow::anyhow!("Drive export request failed: {e}")))?;
@@ -315,15 +352,23 @@ async fn handle_download(matches: &ArgMatches) -> Result<(), GwsError> {
         if !r.status().is_success() {
             let status = r.status();
             let body = r.text().await.unwrap_or_default();
-            return Err(executor::api_error_from_response(status, &body));
+            return Err(executor::api_error_from_response(
+                status,
+                &body,
+                &executor::AuthMethod::OAuth,
+            ));
         }
         r
     } else {
         let r = crate::client::send_with_retry(|| {
-            client
+            let mut req = client
                 .get(&metadata_url)
                 .query(&[("alt", "media")])
-                .bearer_auth(&token)
+                .bearer_auth(&token);
+            if let Some(qp) = crate::auth::get_quota_project() {
+                req = req.header("x-goog-user-project", qp);
+            }
+            req
         })
         .await
         .map_err(|e| GwsError::Other(anyhow::anyhow!("Drive download request failed: {e}")))?;
@@ -331,7 +376,11 @@ async fn handle_download(matches: &ArgMatches) -> Result<(), GwsError> {
         if !r.status().is_success() {
             let status = r.status();
             let body = r.text().await.unwrap_or_default();
-            return Err(executor::api_error_from_response(status, &body));
+            return Err(executor::api_error_from_response(
+                status,
+                &body,
+                &executor::AuthMethod::OAuth,
+            ));
         }
         r
     };

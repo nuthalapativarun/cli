@@ -818,7 +818,24 @@ fn handle_error_response<T>(
 /// payload so that specialised error handling (e.g. `accessNotConfigured`
 /// hints) works correctly in callers that perform their own HTTP requests
 /// outside of [`execute_method`].
-pub fn api_error_from_response(status: reqwest::StatusCode, body: &str) -> GwsError {
+///
+/// When `auth_method` is [`AuthMethod::None`] and the status is 401 or 403,
+/// a helpful login hint is returned — mirroring the behaviour of the internal
+/// `handle_error_response` helper.
+pub fn api_error_from_response(
+    status: reqwest::StatusCode,
+    body: &str,
+    auth_method: &AuthMethod,
+) -> GwsError {
+    // Mirror handle_error_response: give a helpful login hint when no auth was provided.
+    if (status.as_u16() == 401 || status.as_u16() == 403) && *auth_method == AuthMethod::None {
+        return GwsError::Auth(
+            "Access denied. No credentials provided. Run `gws auth login` or set \
+             GOOGLE_WORKSPACE_CLI_CREDENTIALS_FILE to an OAuth credentials JSON file."
+                .to_string(),
+        );
+    }
+
     if let Ok(error_json) = serde_json::from_str::<Value>(body) {
         if let Some(err_obj) = error_json.get("error") {
             let code = err_obj
