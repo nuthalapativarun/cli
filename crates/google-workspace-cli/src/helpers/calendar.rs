@@ -423,8 +423,7 @@ fn build_insert_request(
     matches: &ArgMatches,
     doc: &crate::discovery::RestDescription,
 ) -> Result<(String, String, Vec<String>), GwsError> {
-    let calendar_id =
-        crate::validate::validate_resource_name(matches.get_one::<String>("calendar").unwrap())?;
+    let calendar_id = matches.get_one::<String>("calendar").unwrap();
     let summary = matches.get_one::<String>("summary").unwrap();
     let start = matches.get_one::<String>("start").unwrap();
     let end = matches.get_one::<String>("end").unwrap();

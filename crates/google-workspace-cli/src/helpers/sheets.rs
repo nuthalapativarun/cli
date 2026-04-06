@@ -209,8 +209,7 @@ fn build_append_request(
     config: &AppendConfig,
     doc: &crate::discovery::RestDescription,
 ) -> Result<(String, String, Vec<String>), GwsError> {
-    crate::validate::validate_resource_name(&config.spreadsheet_id)?;
-    crate::validate::validate_resource_name(&config.range)?;
+    let spreadsheet_id = crate::validate::validate_resource_name(&config.spreadsheet_id)?;
 
     let spreadsheets_res = doc
         .resources
@@ -224,7 +223,7 @@ fn build_append_request(
     })?;
 
     let params = json!({
-        "spreadsheetId": config.spreadsheet_id,
+        "spreadsheetId": spreadsheet_id,
         "range": config.range,
         "valueInputOption": "USER_ENTERED"
     });
@@ -243,8 +242,7 @@ fn build_read_request(
     config: &ReadConfig,
     doc: &crate::discovery::RestDescription,
 ) -> Result<(String, Vec<String>), GwsError> {
-    crate::validate::validate_resource_name(&config.spreadsheet_id)?;
-    crate::validate::validate_resource_name(&config.range)?;
+    let spreadsheet_id = crate::validate::validate_resource_name(&config.spreadsheet_id)?;
 
     // ... resource lookup omitted for brevity ...
     let spreadsheets_res = doc
@@ -259,7 +257,7 @@ fn build_read_request(
     })?;
 
     let params = json!({
-        "spreadsheetId": config.spreadsheet_id,
+        "spreadsheetId": spreadsheet_id,
         "range": config.range
     });
 
