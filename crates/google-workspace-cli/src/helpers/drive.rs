@@ -148,7 +148,7 @@ fn build_metadata(filename: &str, parent_id: Option<&str>) -> Result<Value, GwsE
     });
 
     if let Some(parent) = parent_id {
-        crate::validate::validate_resource_name(parent)?;
+        let parent = crate::validate::validate_resource_name(parent)?;
         metadata["parents"] = json!([parent]);
     }
 

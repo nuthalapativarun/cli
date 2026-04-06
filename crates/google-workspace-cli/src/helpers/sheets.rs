@@ -210,6 +210,7 @@ fn build_append_request(
     doc: &crate::discovery::RestDescription,
 ) -> Result<(String, String, Vec<String>), GwsError> {
     crate::validate::validate_resource_name(&config.spreadsheet_id)?;
+    crate::validate::validate_resource_name(&config.range)?;
 
     let spreadsheets_res = doc
         .resources
@@ -243,6 +244,7 @@ fn build_read_request(
     doc: &crate::discovery::RestDescription,
 ) -> Result<(String, Vec<String>), GwsError> {
     crate::validate::validate_resource_name(&config.spreadsheet_id)?;
+    crate::validate::validate_resource_name(&config.range)?;
 
     // ... resource lookup omitted for brevity ...
     let spreadsheets_res = doc
