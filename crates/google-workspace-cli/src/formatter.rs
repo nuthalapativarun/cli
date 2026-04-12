@@ -418,10 +418,63 @@ fn csv_escape(s: &str) -> String {
     }
 }
 
+/// Strips ANSI/VT terminal escape sequences and C0/C1 control characters
+/// (except `\t` and `\n`) from a string.
+///
+/// API responses may contain user-generated content with embedded escape codes.
+/// JSON output is safe because serde serialises control characters as `\uXXXX`,
+/// but table/CSV/YAML formats pass strings through verbatim, which would allow
+/// a malicious API value to inject terminal sequences into the user's terminal.
+fn strip_control_chars(s: &str) -> String {
+    let mut out = String::with_capacity(s.len());
+    let mut chars = s.chars().peekable();
+    while let Some(c) = chars.next() {
+        match c {
+            // ESC-prefixed sequences: consume until the sequence terminator.
+            '\x1b' => {
+                match chars.peek() {
+                    // CSI sequences: ESC [ ... <final byte 0x40–0x7E>
+                    Some('[') => {
+                        chars.next();
+                        for ch in chars.by_ref() {
+                            if ('\x40'..='\x7e').contains(&ch) {
+                                break;
+                            }
+                        }
+                    }
+                    // OSC sequences: ESC ] ... ST (BEL or ESC \)
+                    Some(']') => {
+                        chars.next();
+                        while let Some(ch) = chars.next() {
+                            if ch == '\x07' {
+                                break; // BEL string terminator
+                            }
+                            if ch == '\x1b' {
+                                chars.next(); // consume the \ of ESC \
+                                break;
+                            }
+                        }
+                    }
+                    // Other Fe sequences: ESC <0x40–0x5F> — consume one char.
+                    Some(&ch) if ('\x40'..='\x5f').contains(&ch) => {
+                        chars.next();
+                    }
+                    _ => {}
+                }
+            }
+            // Allow tab and newline; strip all other C0/C1 control characters.
+            '\t' | '\n' => out.push(c),
+            c if c.is_control() => {}
+            c => out.push(c),
+        }
+    }
+    out
+}
+
 fn value_to_cell(value: &Value) -> String {
     match value {
         Value::Null => String::new(),
-        Value::String(s) => s.clone(),
+        Value::String(s) => strip_control_chars(s),
         Value::Bool(b) => b.to_string(),
         Value::Number(n) => n.to_string(),
         Value::Array(arr) => {
@@ -627,6 +680,50 @@ mod tests {
         assert_eq!(csv_escape("simple"), "simple");
         assert_eq!(csv_escape("has,comma"), "\"has,comma\"");
         assert_eq!(csv_escape("has\"quote"), "\"has\"\"quote\"");
+    }
+
+    #[test]
+    fn test_strip_control_chars_clean_string() {
+        assert_eq!(strip_control_chars("hello world"), "hello world");
+        assert_eq!(strip_control_chars("tab\there"), "tab\there");
+        assert_eq!(strip_control_chars("line\nbreak"), "line\nbreak");
+    }
+
+    #[test]
+    fn test_strip_control_chars_csi_sequence() {
+        // SGR colour code: ESC [ 31 m
+        assert_eq!(strip_control_chars("\x1b[31mred\x1b[0m"), "red");
+        // Bold: ESC [ 1 m
+        assert_eq!(strip_control_chars("\x1b[1mbold\x1b[m"), "bold");
+    }
+
+    #[test]
+    fn test_strip_control_chars_osc_sequence() {
+        // OSC title injection: ESC ] 0 ; malicious BEL
+        assert_eq!(
+            strip_control_chars("\x1b]0;malicious\x07clean"),
+            "clean"
+        );
+        // OSC terminated by ESC \
+        assert_eq!(
+            strip_control_chars("\x1b]2;title\x1b\\clean"),
+            "clean"
+        );
+    }
+
+    #[test]
+    fn test_strip_control_chars_c0_control() {
+        // NUL, BEL, BS, CR stripped; tab and newline kept
+        assert_eq!(strip_control_chars("a\x00b"), "ab");
+        assert_eq!(strip_control_chars("a\x07b"), "ab");
+        assert_eq!(strip_control_chars("a\x08b"), "ab");
+        assert_eq!(strip_control_chars("a\rb"), "ab");
+    }
+
+    #[test]
+    fn test_value_to_cell_sanitizes_escape_sequences() {
+        let val = Value::String("\x1b[31mred\x1b[0m".to_string());
+        assert_eq!(value_to_cell(&val), "red");
     }
 
     #[test]
