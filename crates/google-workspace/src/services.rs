@@ -131,7 +131,7 @@ pub const SERVICES: &[ServiceEntry] = &[
         description: "Cross-service productivity workflows",
     },
     ServiceEntry {
-        aliases: &["script"],
+        aliases: &["script", "apps-script"],
         api_name: "script",
         version: "v1",
         description: "Manage Google Apps Script projects",
@@ -173,6 +173,18 @@ mod tests {
         assert_eq!(
             resolve_service("reports").unwrap(),
             ("admin".to_string(), "reports_v1".to_string())
+        );
+    }
+
+    #[test]
+    fn test_resolve_service_script_aliases() {
+        assert_eq!(
+            resolve_service("script").unwrap(),
+            ("script".to_string(), "v1".to_string())
+        );
+        assert_eq!(
+            resolve_service("apps-script").unwrap(),
+            ("script".to_string(), "v1".to_string())
         );
     }
 
