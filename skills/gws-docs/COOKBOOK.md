@@ -73,13 +73,11 @@ gws docs documents batchUpdate \
   --json '{
     "requests": [{
       "updateDocumentTab": {
-        "documentTab": {
-          "tabProperties": {
-            "tabId": "TAB_ID",
-            "title": "New Name"
-          }
+        "tabId": "TAB_ID",
+        "tabProperties": {
+          "title": "New Name"
         },
-        "tabUpdateMask": "tabProperties.title"
+        "updateMask": "title"
       }
     }]
   }'
