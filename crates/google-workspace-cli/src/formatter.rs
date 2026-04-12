@@ -444,10 +444,12 @@ fn strip_control_chars(s: &str) -> String {
     fn consume_until_st(chars: &mut std::iter::Peekable<std::str::Chars<'_>>) {
         while let Some(ch) = chars.next() {
             if ch == '\x07' {
-                break;
+                break; // BEL string terminator
             }
             if ch == '\x1b' {
-                chars.next(); // consume the `\` of ESC \
+                if let Some('\\') = chars.peek() {
+                    chars.next(); // consume the `\` of ESC \
+                }
                 break;
             }
         }
