@@ -27,7 +27,7 @@ gws drive <resource> <method> [flags]
 
 ## Shared Drives
 
-Files stored in a shared drive are not returned by default. If a file search returns no results, add `supportsAllDrives=true` to your `--params`:
+Files stored in a shared drive are not returned by default. If a file search returns no results, add "supportsAllDrives": true to your --params:
 
 ```bash
 # List files across all drives (including shared drives)
