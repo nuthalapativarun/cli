@@ -25,6 +25,18 @@ gws drive <resource> <method> [flags]
 |---------|-------------|
 | [`+upload`](../gws-drive-upload/SKILL.md) | Upload a file with automatic metadata |
 
+## Content Creation Guidance
+
+> **Important:** The Drive API cannot set cell values, document text, or slide content. Using `drive files create` with a Sheets, Docs, or Slides MIME type creates an empty shell file — use the service-specific APIs instead:
+>
+> | Goal | Command |
+> |------|---------|
+> | Create a spreadsheet with data | `gws sheets spreadsheets create` |
+> | Create a Google Doc with content | `gws docs documents create` |
+> | Create a Google Slides presentation | `gws slides presentations create` |
+>
+> Only use `drive files create` when uploading binary/non-Google file types (e.g. PDF, PNG, CSV) or creating plain empty containers like folders.
+
 ## API Resources
 
 ### about
