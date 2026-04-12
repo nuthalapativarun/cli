@@ -59,6 +59,12 @@ pub const SERVICES: &[ServiceEntry] = &[
         description: "Audit logs and usage reports",
     },
     ServiceEntry {
+        aliases: &["admin-directory", "directory"],
+        api_name: "admin",
+        version: "directory_v1",
+        description: "Manage users, groups, and organizational units",
+    },
+    ServiceEntry {
         aliases: &["docs"],
         api_name: "docs",
         version: "v1",
@@ -173,6 +179,18 @@ mod tests {
         assert_eq!(
             resolve_service("reports").unwrap(),
             ("admin".to_string(), "reports_v1".to_string())
+        );
+    }
+
+    #[test]
+    fn test_resolve_service_admin_directory_aliases() {
+        assert_eq!(
+            resolve_service("admin-directory").unwrap(),
+            ("admin".to_string(), "directory_v1".to_string())
+        );
+        assert_eq!(
+            resolve_service("directory").unwrap(),
+            ("admin".to_string(), "directory_v1".to_string())
         );
     }
 
