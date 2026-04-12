@@ -25,6 +25,20 @@ gws drive <resource> <method> [flags]
 |---------|-------------|
 | [`+upload`](../gws-drive-upload/SKILL.md) | Upload a file with automatic metadata |
 
+## Shared Drives
+
+Files stored in a shared drive are not returned by default. If a file search returns no results, add `supportsAllDrives=true` to your `--params`:
+
+```bash
+# List files across all drives (including shared drives)
+gws drive files list --params '{"q":"name = '\''report.pdf'\''","supportsAllDrives":true,"includeItemsFromAllDrives":true}'
+
+# Get a file that lives in a shared drive
+gws drive files get --params '{"fileId":"FILE_ID","supportsAllDrives":true}'
+```
+
+> **Tip:** If you can't find a file and the user mentions it's in a shared drive, retry the request with `supportsAllDrives: true` and `includeItemsFromAllDrives: true`.
+
 ## API Resources
 
 ### about
