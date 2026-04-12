@@ -37,7 +37,7 @@ gws drive files list --params '{"q":"name = '\''report.pdf'\''","supportsAllDriv
 gws drive files get --params '{"fileId":"FILE_ID","supportsAllDrives":true}'
 ```
 
-> **Tip:** If you can't find a file and the user mentions it's in a shared drive, retry the request with `supportsAllDrives: true` and `includeItemsFromAllDrives: true`.
+> **Tip:** If you can't find a file and the user mentions it's in a shared drive, retry the request with "supportsAllDrives": true (and "includeItemsFromAllDrives": true for list requests).
 
 ## API Resources
 
