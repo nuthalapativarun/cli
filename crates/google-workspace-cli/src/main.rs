@@ -324,6 +324,9 @@ pub fn parse_service_and_version(
 ) -> Result<(String, String), GwsError> {
     let mut service_arg = first_arg;
     let mut version_override: Option<String> = None;
+    // Tracks whether the user explicitly provided an `<api>:<version>` pair,
+    // which enables the unlisted-API bypass below.
+    let mut explicit_version_from_colon = false;
 
     // Check for --api-version flag anywhere in args
     for i in 0..args.len() {
@@ -337,12 +340,27 @@ pub fn parse_service_and_version(
         service_arg = svc;
         if version_override.is_none() {
             version_override = Some(ver.to_string());
+            explicit_version_from_colon = true;
         }
     }
 
-    let (api_name, default_version) = services::resolve_service(service_arg)?;
-    let version = version_override.unwrap_or(default_version);
-    Ok((api_name, version))
+    // Try the known-service registry first.  If the service isn't registered
+    // but the caller provided an explicit version via `<api>:<version>`, bypass
+    // the registry and pass the names directly to the Discovery fetch — the
+    // Discovery Document URL validation in `fetch_discovery_document` will
+    // reject invalid identifiers.
+    match services::resolve_service(service_arg) {
+        Ok((api_name, default_version)) => {
+            let version = version_override.unwrap_or(default_version);
+            Ok((api_name, version))
+        }
+        Err(_) if explicit_version_from_colon => {
+            // Unlisted API: use api_name and version as-is.
+            let version = version_override.expect("set above when colon was found");
+            Ok((service_arg.to_string(), version))
+        }
+        Err(e) => Err(e),
+    }
 }
 
 pub fn filter_args_for_subcommand(args: &[String], service_name: &str) -> Vec<String> {
@@ -524,6 +542,51 @@ fn is_version_flag(arg: &str) -> bool {
 #[cfg(test)]
 mod tests {
     use super::*;
+
+    #[test]
+    fn test_parse_service_and_version_known_service() {
+        let args: Vec<String> = vec!["gws".into(), "drive".into()];
+        let (api, ver) = parse_service_and_version(&args, "drive").unwrap();
+        assert_eq!(api, "drive");
+        assert_eq!(ver, "v3");
+    }
+
+    #[test]
+    fn test_parse_service_and_version_known_service_colon_override() {
+        // Colon syntax overrides the default version for a known service.
+        let args: Vec<String> = vec!["gws".into(), "drive:v2".into()];
+        let (api, ver) = parse_service_and_version(&args, "drive:v2").unwrap();
+        assert_eq!(api, "drive");
+        assert_eq!(ver, "v2");
+    }
+
+    #[test]
+    fn test_parse_service_and_version_unlisted_api_colon_syntax() {
+        // An unlisted API with explicit version bypasses the registry.
+        let args: Vec<String> = vec!["gws".into(), "admob:v1".into()];
+        let (api, ver) = parse_service_and_version(&args, "admob:v1").unwrap();
+        assert_eq!(api, "admob");
+        assert_eq!(ver, "v1");
+    }
+
+    #[test]
+    fn test_parse_service_and_version_unlisted_api_no_version_errors() {
+        // Without a version, an unknown service must still return an error.
+        let args: Vec<String> = vec!["gws".into(), "admob".into()];
+        let err = parse_service_and_version(&args, "admob");
+        assert!(err.is_err());
+        let msg = err.unwrap_err().to_string();
+        assert!(msg.contains("Unknown service"));
+        assert!(msg.contains("<api>:<version>"));
+    }
+
+    #[test]
+    fn test_parse_service_and_version_api_version_flag_unlisted() {
+        // --api-version flag alone does NOT bypass the registry for unknown services.
+        let args: Vec<String> = vec!["gws".into(), "admob".into(), "--api-version".into(), "v1".into()];
+        let err = parse_service_and_version(&args, "admob");
+        assert!(err.is_err());
+    }
 
     #[test]
     fn test_parse_pagination_config_defaults() {
