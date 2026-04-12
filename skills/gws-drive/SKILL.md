@@ -27,13 +27,15 @@ gws drive <resource> <method> [flags]
 
 ## Content Creation Guidance
 
-> **Important:** The Drive API cannot set cell values, document text, or slide content. Using `drive files create` with a Sheets, Docs, or Slides MIME type creates an empty shell file — use the service-specific APIs instead:
+> **Important:** The Drive API cannot set cell values, document text, or slide content. Using `drive files create` with a Sheets, Docs, or Slides MIME type creates an unreachable empty shell — use the service-specific APIs to create and populate content:
 >
-> | Goal | Command |
-> |------|---------|
-> | Create a spreadsheet with data | `gws sheets spreadsheets create` |
-> | Create a Google Doc with content | `gws docs documents create` |
-> | Create a Google Slides presentation | `gws slides presentations create` |
+> | Goal | Step 1 — create | Step 2 — write content |
+> |------|-----------------|----------------------|
+> | Spreadsheet | `gws sheets spreadsheets create` → returns `spreadsheetId` | `gws sheets spreadsheets values batchUpdate` |
+> | Google Doc | `gws docs documents create` → returns `documentId` | `gws docs documents batchUpdate` |
+> | Slides presentation | `gws slides presentations create` → returns `presentationId` | `gws slides presentations batchUpdate` |
+>
+> Note: the `create` calls for Docs and Slides also produce blank files; any content in the request body is ignored by those APIs. Always follow with a `batchUpdate` call to insert content.
 >
 > Only use `drive files create` when uploading binary/non-Google file types (e.g. PDF, PNG, CSV) or creating plain empty containers like folders.
 
