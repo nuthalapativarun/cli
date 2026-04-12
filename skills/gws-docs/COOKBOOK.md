@@ -35,7 +35,7 @@ gws docs documents batchUpdate \
   --json '{
     "requests": [{
       "addDocumentTab": {
-        "documentTab": {},
+        "tab": {},
         "insertionIndex": 1
       }
     }]
