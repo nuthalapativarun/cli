@@ -27,7 +27,7 @@ gws drive <resource> <method> [flags]
 
 ## Content Creation Guidance
 
-> **Important:** The Drive API cannot set cell values, document text, or slide content. Using `drive files create` with a Sheets, Docs, or Slides MIME type creates an unreachable empty shell — use the service-specific APIs to create and populate content:
+> **Important:** The Drive API cannot set cell values, document text, or slide content. Using `drive files create` with a Sheets, Docs, or Slides MIME type creates an empty shell — use the service-specific APIs to create and populate content:
 >
 > | Goal | Step 1 — create | Step 2 — write content |
 > |------|-----------------|----------------------|
