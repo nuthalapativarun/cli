@@ -281,6 +281,7 @@ fn json_to_yaml(value: &Value, indent: usize) -> String {
         Value::Bool(b) => b.to_string(),
         Value::Number(n) => n.to_string(),
         Value::String(s) => {
+            let s = strip_control_chars(s);
             if s.contains('\n') {
                 // Genuine multi-line content: block scalar is the most readable choice.
                 format!(
@@ -425,15 +426,39 @@ fn csv_escape(s: &str) -> String {
 /// JSON output is safe because serde serialises control characters as `\uXXXX`,
 /// but table/CSV/YAML formats pass strings through verbatim, which would allow
 /// a malicious API value to inject terminal sequences into the user's terminal.
+///
+/// Sequences handled:
+/// - CSI  `ESC [` … final-byte          (SGR colours, cursor movement, …)
+/// - OSC  `ESC ]` … BEL or ST          (window title, hyperlinks, …)
+/// - DCS  `ESC P` … ST                 (device-control strings)
+/// - SOS  `ESC X` … ST                 (start-of-string)
+/// - PM   `ESC ^` … ST                 (privacy message)
+/// - APC  `ESC _` … ST                 (application-program command)
+/// - Other two-char Fe sequences        (`ESC` + 0x40–0x5F, not in the above)
+/// - Bare C0/C1 control characters      (NUL, BEL, BS, CR, …; tab/newline kept)
 fn strip_control_chars(s: &str) -> String {
     let mut out = String::with_capacity(s.len());
     let mut chars = s.chars().peekable();
+
+    /// Consume chars until ST (BEL `\x07` or `ESC \`), used for OSC/DCS/SOS/PM/APC.
+    fn consume_until_st(chars: &mut std::iter::Peekable<std::str::Chars<'_>>) {
+        while let Some(ch) = chars.next() {
+            if ch == '\x07' {
+                break;
+            }
+            if ch == '\x1b' {
+                chars.next(); // consume the `\` of ESC \
+                break;
+            }
+        }
+    }
+
     while let Some(c) = chars.next() {
         match c {
             // ESC-prefixed sequences: consume until the sequence terminator.
             '\x1b' => {
-                match chars.peek() {
-                    // CSI sequences: ESC [ ... <final byte 0x40–0x7E>
+                match chars.peek().copied() {
+                    // CSI: ESC [ … <final byte 0x40–0x7E>
                     Some('[') => {
                         chars.next();
                         for ch in chars.by_ref() {
@@ -442,21 +467,33 @@ fn strip_control_chars(s: &str) -> String {
                             }
                         }
                     }
-                    // OSC sequences: ESC ] ... ST (BEL or ESC \)
+                    // OSC: ESC ] … ST
                     Some(']') => {
                         chars.next();
-                        while let Some(ch) = chars.next() {
-                            if ch == '\x07' {
-                                break; // BEL string terminator
-                            }
-                            if ch == '\x1b' {
-                                chars.next(); // consume the \ of ESC \
-                                break;
-                            }
-                        }
+                        consume_until_st(&mut chars);
                     }
-                    // Other Fe sequences: ESC <0x40–0x5F> — consume one char.
-                    Some(&ch) if ('\x40'..='\x5f').contains(&ch) => {
+                    // DCS: ESC P … ST
+                    Some('P') => {
+                        chars.next();
+                        consume_until_st(&mut chars);
+                    }
+                    // SOS: ESC X … ST
+                    Some('X') => {
+                        chars.next();
+                        consume_until_st(&mut chars);
+                    }
+                    // PM: ESC ^ … ST
+                    Some('^') => {
+                        chars.next();
+                        consume_until_st(&mut chars);
+                    }
+                    // APC: ESC _ … ST
+                    Some('_') => {
+                        chars.next();
+                        consume_until_st(&mut chars);
+                    }
+                    // Other Fe two-char sequences: ESC <0x40–0x5F> — consume one char.
+                    Some(ch) if ('\x40'..='\x5f').contains(&ch) => {
                         chars.next();
                     }
                     _ => {}
@@ -721,9 +758,36 @@ mod tests {
     }
 
     #[test]
+    fn test_strip_control_chars_dcs_sequence() {
+        // DCS: ESC P … ST (BEL-terminated)
+        assert_eq!(strip_control_chars("\x1bPdcs-payload\x07clean"), "clean");
+        // DCS: ESC P … ST (ESC \-terminated)
+        assert_eq!(strip_control_chars("\x1bPdcs-payload\x1b\\clean"), "clean");
+    }
+
+    #[test]
+    fn test_strip_control_chars_sos_pm_apc_sequences() {
+        // SOS: ESC X … ST
+        assert_eq!(strip_control_chars("\x1bXsos-payload\x07clean"), "clean");
+        // PM: ESC ^ … ST
+        assert_eq!(strip_control_chars("\x1b^pm-payload\x07clean"), "clean");
+        // APC: ESC _ … ST
+        assert_eq!(strip_control_chars("\x1b_apc-payload\x07clean"), "clean");
+    }
+
+    #[test]
     fn test_value_to_cell_sanitizes_escape_sequences() {
         let val = Value::String("\x1b[31mred\x1b[0m".to_string());
         assert_eq!(value_to_cell(&val), "red");
+    }
+
+    #[test]
+    fn test_format_yaml_sanitizes_escape_sequences() {
+        // YAML strings must also be sanitized.
+        let val = json!({"title": "\x1b]0;injected\x07safe"});
+        let output = format_value(&val, &OutputFormat::Yaml);
+        assert!(output.contains("safe"));
+        assert!(!output.contains("\x1b"));
     }
 
     #[test]
