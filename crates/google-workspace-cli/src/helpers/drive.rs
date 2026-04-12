@@ -203,9 +203,9 @@ async fn handle_download(
             "{}",
             serde_json::to_string_pretty(&json!({
                 "dry_run": true,
-                "file_id": file_id,
+                "fileId": file_id,
                 "output": out_display,
-                "export_mime_type": export_mime,
+                "exportMimeType": export_mime,
             }))
             .unwrap_or_default()
         );
@@ -251,7 +251,7 @@ async fn handle_download(
 
     // 2. Fetch file metadata to get name and MIME type
     let encoded_id = crate::validate::encode_path_segment(file_id);
-    let metadata_url = format!("{}files/{}", base_url, encoded_id);
+    let metadata_url = format!("{}/files/{}", base_url.trim_end_matches('/'), encoded_id);
     let meta_resp = crate::client::send_with_retry(|| {
         let mut req = client
             .get(&metadata_url)
@@ -335,7 +335,7 @@ async fn handle_download(
         // Safety: export_mime is validated as Some above for native files.
         let mime = export_mime.as_deref().unwrap();
         // Build export URL from Discovery Document base URL (respects custom root_url).
-        let export_url = format!("{}files/{}/export", base_url, encoded_id);
+        let export_url = format!("{}/files/{}/export", base_url.trim_end_matches('/'), encoded_id);
         let r = crate::client::send_with_retry(|| {
             let mut req = client
                 .get(&export_url)
@@ -445,9 +445,9 @@ async fn handle_download(
     println!(
         "{}",
         serde_json::to_string_pretty(&json!({
-            "saved_file": out_path.display().to_string(),
+            "savedFile": out_path.display().to_string(),
             "bytes": byte_count,
-            "mime_type": output_mime,
+            "mimeType": output_mime,
         }))
         .unwrap_or_default()
     );
