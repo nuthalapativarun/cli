@@ -136,32 +136,40 @@ Named style types: `HEADING_1` through `HEADING_6`, `NORMAL_TEXT`, `TITLE`, `SUB
 Apply `updateTextStyle` after inserting the text:
 
 ```bash
-{
-  "updateTextStyle": {
-    "range": {"segmentId": "", "startIndex": 1, "endIndex": 6},
-    "textStyle": {"bold": true, "italic": false},
-    "fields": "bold,italic"
-  }
-}
+gws docs documents batchUpdate \
+  --params '{"documentId":"DOC_ID"}' \
+  --json '{
+    "requests": [{
+      "updateTextStyle": {
+        "range": {"segmentId": "", "startIndex": 1, "endIndex": 6},
+        "textStyle": {"bold": true, "italic": false},
+        "fields": "bold,italic"
+      }
+    }]
+  }'
 ```
 
 ### Insert a bulleted list item
 
 ```bash
-[
-  {
-    "insertText": {
-      "text": "List item\n",
-      "location": {"segmentId": "", "index": 1}
-    }
-  },
-  {
-    "createParagraphBullets": {
-      "range": {"segmentId": "", "startIndex": 1, "endIndex": 11},
-      "bulletPreset": "BULLET_DISC_CIRCLE_SQUARE"
-    }
-  }
-]
+gws docs documents batchUpdate \
+  --params '{"documentId":"DOC_ID"}' \
+  --json '{
+    "requests": [
+      {
+        "insertText": {
+          "text": "List item\n",
+          "location": {"segmentId": "", "index": 1}
+        }
+      },
+      {
+        "createParagraphBullets": {
+          "range": {"segmentId": "", "startIndex": 1, "endIndex": 11},
+          "bulletPreset": "BULLET_DISC_CIRCLE_SQUARE"
+        }
+      }
+    ]
+  }'
 ```
 
 ---
