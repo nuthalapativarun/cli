@@ -335,12 +335,14 @@ pub fn parse_service_and_version(
         }
     }
 
-    // Support "service:version" syntax on the service arg itself
+    // Support "service:version" syntax on the service arg itself.
+    // Always mark the colon as present so the unlisted-API bypass fires even
+    // when --api-version was also supplied.
     if let Some((svc, ver)) = service_arg.split_once(':') {
         service_arg = svc;
+        explicit_version_from_colon = true;
         if version_override.is_none() {
             version_override = Some(ver.to_string());
-            explicit_version_from_colon = true;
         }
     }
 
@@ -355,7 +357,7 @@ pub fn parse_service_and_version(
             Ok((api_name, version))
         }
         Err(_) if explicit_version_from_colon => {
-            // Unlisted API: use api_name and version as-is.
+            // Unlisted API: version comes from the colon syntax or --api-version flag.
             let version = version_override.expect("set above when colon was found");
             Ok((service_arg.to_string(), version))
         }
@@ -586,6 +588,19 @@ mod tests {
         let args: Vec<String> = vec!["gws".into(), "admob".into(), "--api-version".into(), "v1".into()];
         let err = parse_service_and_version(&args, "admob");
         assert!(err.is_err());
+    }
+
+    #[test]
+    fn test_parse_service_and_version_colon_plus_api_version_flag_unlisted() {
+        // <api>:<version> colon syntax bypasses registry even when --api-version is
+        // also present; --api-version takes precedence for the version value.
+        let args: Vec<String> = vec![
+            "gws".into(), "admob:v1".into(),
+            "--api-version".into(), "v2".into(),
+        ];
+        let (api, ver) = parse_service_and_version(&args, "admob:v1").unwrap();
+        assert_eq!(api, "admob");
+        assert_eq!(ver, "v2"); // --api-version wins
     }
 
     #[test]
