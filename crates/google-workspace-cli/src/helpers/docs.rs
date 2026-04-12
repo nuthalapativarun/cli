@@ -68,7 +68,7 @@ TIPS:
         Box::pin(async move {
             if let Some(sub_matches) = matches.subcommand_matches("+write") {
                 let (params_str, body_str, scopes) = build_write_request(sub_matches, doc)?;
-                let output_format = matches
+                let output_format = sub_matches
                     .get_one::<String>("format")
                     .map(|s| crate::formatter::OutputFormat::from_str(s))
                     .unwrap_or_default();
